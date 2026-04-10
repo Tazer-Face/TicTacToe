@@ -16,32 +16,23 @@ return { state: state, accept: true };
 }
 
 function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
-for (var i = 0; i < presences.length; i++) {
-var p = presences[i];
+  presences.forEach(p => {
+    if (!state.players.find(pl => pl.userId === p.userId)) {
+      const symbol = state.players.length === 0 ? "X" : "O";
 
-```
-var exists = false;
-for (var j = 0; j < state.players.length; j++) {
-  if (state.players[j].userId === p.userId) {
-    exists = true;
-    break;
-  }
-}
-
-if (!exists) {
-  var symbol = state.players.length === 0 ? "X" : "O";
-
-  state.players.push({
-    userId: p.userId,
-    symbol: symbol
+      state.players.push({
+        userId: p.userId,
+        symbol,
+        nickname: p.username,
+      });
+    }
   });
-}
-```
 
-}
+  logger.info("Players joined: " + state.players.length);
 
-dispatcher.broadcastMessage(2, JSON.stringify(state));
-return { state: state };
+  dispatcher.broadcastMessage(2, JSON.stringify(state));
+
+  return { state };
 }
 
 function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
