@@ -1,261 +1,252 @@
 function matchInit(ctx, logger, nk, params) {
-  return {
-    state: {
-      players: [], // [{ userId, symbol }]
-      board: Array(9).fill(null),
-      currentTurn: 0, // 0 -> X, 1 -> O
-      winner: null,
-      stopBroadcast: false
-    },
-    tickRate: 5,
-    label: "default"
-  };
+return {
+state: {
+players: [],
+board: Array(9).fill(null),
+currentTurn: 0,
+winner: null,
+stopBroadcast: false
+},
+tickRate: 5,
+label: "default"
+};
 }
 
 function matchJoinAttempt(ctx, logger, nk, dispatcher, tick, state, presence) {
-  return { state, accept: true };
+return { state, accept: true };
 }
 
 function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
-  presences.forEach(p => {
-    // prevent duplicate joins
-    if (!state.players.find(pl => pl.userId === p.userId)) {
-      const symbol = state.players.length === 0 ? "X" : "O";
+presences.forEach(p => {
+if (!state.players.find(pl => pl.userId === p.userId)) {
+const symbol = state.players.length === 0 ? "X" : "O";
 
-      state.players.push({
-        userId: p.userId,
-        symbol,
-        nickname: p.username,
-      });
-    }
+```
+  state.players.push({
+    userId: p.userId,
+    symbol,
+    nickname: p.username,
   });
+}
+```
 
-  logger.info("Players joined: " + state.players.length);
+});
 
-  // send initial state
-  dispatcher.broadcastMessage(2, JSON.stringify(state));
+logger.info("Players joined: " + state.players.length);
 
+dispatcher.broadcastMessage(2, JSON.stringify(state));
 
-  return { state };
+return { state };
 }
 
 function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
-  const leavingIds = new Set(presences.map(p => p.userId));
-
-  state.players = state.players.filter(p => !leavingIds.has(p.userId));
-
-  return { state };
+const leavingIds = new Set(presences.map(p => p.userId));
+state.players = state.players.filter(p => !leavingIds.has(p.userId));
+return { state };
 }
 
 function checkWinner(board) {
-  const wins = [
-    [0,1,2],[3,4,5],[6,7,8],
-    [0,3,6],[1,4,7],[2,5,8],
-    [0,4,8],[2,4,6]
-  ];
+const wins = [
+[0,1,2],[3,4,5],[6,7,8],
+[0,3,6],[1,4,7],[2,5,8],
+[0,4,8],[2,4,6]
+];
 
-  for (let [a,b,c] of wins) {
-    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return board[a];
-    }
-  }
+for (let [a,b,c] of wins) {
+if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+return board[a];
+}
+}
 
-  return null;
+return null;
 }
 
 function updatePlayerStats(nk, logger, players, winner) {
-  players.forEach(player => {
-    try {
-      // 1. Read existing stats
+players.forEach(player => {
+try {
+const records = nk.storageRead([{
+collection: "stats",
+key: "user_stats",
+userId: player.userId
+}]);
+
+```
+  let current = { wins: 0, losses: 0, draws: 0 };
+
+  if (records.length > 0) {
+    current = records[0].value;
+  }
+
+  if (winner === "draw") {
+    current.draws += 1;
+  } else if (player.symbol === winner) {
+    current.wins += 1;
+  } else {
+    current.losses += 1;
+  }
+
+  nk.storageWrite([{
+    collection: "stats",
+    key: "user_stats",
+    userId: player.userId,
+    value: current,
+    permissionRead: 2,
+    permissionWrite: 0
+  }]);
+
+} catch (err) {
+  logger.error("Stats update failed for " + player.userId + ": " + err);
+}
+```
+
+});
+}
+
+function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
+
+if (!state.players || state.players.length === 0) {
+return { state };
+}
+
+if (!state.stopBroadcast) {
+dispatcher.broadcastMessage(2, JSON.stringify(state));
+}
+
+messages.forEach((msg) => {
+let data;
+
+```
+try {
+  const decoded = nk.binaryToString(msg.data);
+  data = JSON.parse(decoded);
+} catch (err) {
+  logger.error("Invalid JSON received");
+  return;
+}
+
+if (msg.opCode === 5) {
+  state.stopBroadcast = true;
+  return;
+}
+
+if (msg.opCode === 1) {
+  if (state.winner) return;
+
+  const player = state.players.find(
+    p => p.userId === msg.sender.userId
+  );
+
+  if (!player) return;
+
+  const expectedSymbol = state.currentTurn === 0 ? "X" : "O";
+
+  if (player.symbol !== expectedSymbol) {
+    return;
+  }
+
+  const index = data.index;
+
+  if (state.board[index] !== null) return;
+
+  state.board[index] = player.symbol;
+
+  const winner = checkWinner(state.board);
+
+  if (winner) {
+    state.winner = winner;
+
+    updatePlayerStats(nk, logger, state.players, winner);
+
+    state.players = state.players.map(player => {
       const records = nk.storageRead([{
         collection: "stats",
         key: "user_stats",
         userId: player.userId
       }]);
 
-      let current = { wins: 0, losses: 0, draws: 0 };
+      let stats = { wins: 0, losses: 0, draws: 0 };
 
       if (records.length > 0) {
-        current = records[0].value;
+        stats = records[0].value;
       }
 
-      // 2. Update values
-      if (winner === "draw") {
-        current.draws += 1;
-      } else if (player.symbol === winner) {
-        current.wins += 1;
-      } else {
-        current.losses += 1;
-      }
+      return {
+        ...player,
+        ...stats
+      };
+    });
 
-      logger.info("Writing stats...");
-
-      // 3. Write back
-      nk.storageWrite([{
-        collection: "stats",
-        key: "user_stats",
-        userId: player.userId,
-        value: current,
-        permissionRead: 2,
-        permissionWrite: 0
-      }]);
-
-    } catch (err) {
-      logger.error("Stats update failed for " + player.userId + ": " + err);
-    }
-  });
-}
-
-function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
-  if (!state.stopBroadcast) {
-    dispatcher.broadcastMessage(2, JSON.stringify(state));
+    dispatcher.broadcastMessage(3, JSON.stringify(state));
+    return;
   }
 
-  messages.forEach((msg) => {
+  const isDraw = state.board.every(cell => cell !== null);
 
-    let data;
+  if (isDraw) {
+    state.winner = "draw";
 
-    try {
-      // ✅ decode binary → string
-      const decoded = nk.binaryToString(msg.data);
+    state.players = state.players.map(player => {
+      const records = nk.storageRead([{
+        collection: "stats",
+        key: "user_stats",
+        userId: player.userId
+      }]);
 
-      // ✅ parse JSON safely
-      data = JSON.parse(decoded);
-    } catch (err) {
-      logger.error("Invalid JSON received: " + msg.data);
-      return;
-    }
+      let stats = { wins: 0, losses: 0, draws: 0 };
 
-    if (msg.opCode === 5) {
-      state.stopBroadcast = true; // ✅ persists
-      return;
-    }
-
-    if (msg.opCode === 1) {
-      if (state.winner) return;
-
-      // ✅ find player by userId
-      const player = state.players.find(
-        p => p.userId === msg.sender.userId
-      );
-
-      if (!player) return;
-
-      // ✅ enforce turn using symbol
-      const expectedSymbol = state.currentTurn === 0 ? "X" : "O";
-
-      if (player.symbol !== expectedSymbol) {
-        logger.info("Wrong turn attempt");
-        return;
+      if (records.length > 0) {
+        stats = records[0].value;
       }
 
-      const index = data.index;
+      return {
+        ...player,
+        ...stats
+      };
+    });
 
-      // ❌ invalid move
-      if (state.board[index] !== null) return;
+    dispatcher.broadcastMessage(3, JSON.stringify(state));
+    return;
+  }
 
-      // ✅ apply move
-      state.board[index] = player.symbol;
+  state.currentTurn = (state.currentTurn + 1) % 2;
 
-      // 🔍 check winner
-      const winner = checkWinner(state.board);
-      if (winner) {
-        state.winner = winner;
+  dispatcher.broadcastMessage(2, JSON.stringify(state));
+}
+```
 
-        updatePlayerStats(nk, logger, state.players, winner);
+});
 
-        // 🔥 attach stats to state
-        state.players = state.players.map(player => {
-          const records = nk.storageRead([{
-            collection: "stats",
-            key: "user_stats",
-            userId: player.userId
-          }]);
-
-          let stats = { wins: 0, losses: 0, draws: 0 };
-
-          if (records.length > 0) {
-            stats = records[0].value;
-          }
-
-          return {
-            ...player,
-            ...stats
-          };
-        });
-
-        dispatcher.broadcastMessage(3, JSON.stringify(state));
-        return;
-      }
-
-      const isDraw = state.board.every(cell => cell !== null);
-
-      if (isDraw) {
-        state.winner = "draw";
-
-        state.players = state.players.map(player => {
-          const records = nk.storageRead([{
-            collection: "stats",
-            key: "user_stats",
-            userId: player.userId
-          }]);
-
-          let stats = { wins: 0, losses: 0, draws: 0 };
-
-          if (records.length > 0) {
-            stats = records[0].value;
-          }
-
-          return {
-            ...player,
-            ...stats
-          };
-        });
-
-        dispatcher.broadcastMessage(3, JSON.stringify(state));
-        return;
-      }
-
-      // 🔁 switch turn
-      state.currentTurn = (state.currentTurn + 1) % 2;
-
-      // 📡 broadcast updated state
-      dispatcher.broadcastMessage(2, JSON.stringify(state));
-    }
-  });
-
-  return { state };
+return { state };
 }
 
 function matchTerminate(ctx, logger, nk, dispatcher, tick, state, graceSeconds) {
-  return { state };
+return { state };
 }
 
+// ✅ FIXED (critical)
 function matchSignal(ctx, logger, nk, dispatcher, tick, state, data) {
-  return { state, data };
+return { state };
 }
 
 function matchmakerMatched(ctx, logger, nk, entries) {
-  logger.info("🔥 MATCHMAKER TRIGGERED");
-
-  const matchId = nk.matchCreate("default", {});
-  return matchId;
+const matchId = nk.matchCreate("default", {});
+return matchId;
 }
 
 function InitModule(ctx, logger, nk, initializer) {
-  logger.info("🔥 JS MODULE LOADED");
+logger.info("JS MODULE LOADED");
 
-  initializer.registerMatch("default", {
-    matchInit,
-    matchJoinAttempt,
-    matchJoin,
-    matchLeave,
-    matchLoop,
-    matchTerminate,
-    matchSignal
-  });
+initializer.registerMatch("default", {
+matchInit,
+matchJoinAttempt,
+matchJoin,
+matchLeave,
+matchLoop,
+matchTerminate,
+matchSignal
+});
 
-  initializer.registerMatchmakerMatched(matchmakerMatched);
+initializer.registerMatchmakerMatched(matchmakerMatched);
 }
 
 globalThis.InitModule = InitModule;
