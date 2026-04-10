@@ -59,12 +59,12 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
       return;
     }
 
-    if (msg.op_code === 5) {
+    if (msg.opCode === 5) {
       state.stopBroadcast = true; // ✅ persists
       return;
     }
 
-    if (msg.op_code === 1) {
+    if (msg.opCode === 1) {
       if (state.winner) return;
 
       // ✅ find player by userId
